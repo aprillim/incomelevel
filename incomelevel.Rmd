@@ -270,7 +270,7 @@ summary(subset(values.log,metric == "Specificity"))
 
 > Given the purposes of this analysis, i don't think it is essential to have high sensitivity, so i would use the threshold of 0.5 to achieve a better error rate. For brevity, I only show the output for the optimal threshold of 0.5 based on best error rate.
 
-# Part 3: random forest (25 points)
+# Part 3: random forest
 
 ## random forest model of the categorized income, variable importance plots and comparison with logistic model and errors given in dataset description.
 
