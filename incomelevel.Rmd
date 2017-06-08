@@ -1,0 +1,527 @@
+---
+title: "Predicting Income Level"
+output:
+  html_document:
+    toc: yes
+  pdf_document:
+    toc: yes
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, cache = TRUE, autodep = TRUE)
+```
+
+# Preface
+
+I will develop classification models to classify census data into ">50K" income bracket or "<=50K" income bracket using several approaches and compare their performance on the "Census Income" dataset from UCI ML.  The description for this dataset also presents performance (prediction accuracy) observed by the dataset providers using variety of modeling techniques -- this supplies a context for the errors of the models we will develop here.
+
+Please note that the original data has been split up into training and test subsets, but there doesn't seem to be anything particular about that split, so I pooled those two datasets together and split them into training and test as necessary. 
+
+```{r Preprocessing, echo=TRUE, cache = TRUE, autodep = TRUE}
+#read data
+data.train <-  read.table("CensusIncome/adult.data", header = F, sep = ",", na.strings = c(" ?"), col.names=c("age", "workclass", "fnlwgt", "ed", "ed-num", "marital", "occ", "rs", "race", "sex", "cgain", "closs", "hours", "ncntry", "inclvl"))
+
+data.test <-  read.table("CensusIncome/adult.test", header = F, sep = ",", na.strings = c(" ?"), col.names=c("age", "workclass", "fnlwgt", "ed", "ed-num", "marital", "occ", "rs", "race", "sex", "cgain", "closs", "hours", "ncntry", "inclvl"))
+
+#remove "." income level 
+data.test$inclvl <- gsub("K.", "K", data.test$inclvl)
+
+#pool data
+data <- rbind(data.train, data.test)
+rm(data.test)
+rm(data.train)
+
+#remove NAs
+data <- na.omit(data)
+
+#remove "final weight" variable
+data <- data[,-grep("fnlwgt",colnames(data))]
+
+#discretize native country to US/non-US
+data$ncntry <- as.factor(ifelse(data$ncntry==" United-States","US","non-US"))
+
+#collaspe High school and below into 1 group
+levels(data$ed) <- c("HS&below","HS&below","HS&below","HS&below","HS&below","HS&below","HS&below","Assoc-acdm","Assoc-voc","Bachelors","Doctorate","HS&below","Masters","HS&below","Prof-school","Some-college")
+
+#log transform cgain and closs for better spread, +0.01 to handle log0
+data$cgain <- log(data$cgain+.01)
+data$closs <- log(data$closs+.01)
+
+#create working datasets
+data.1000 <- data[sample(1:nrow(data), 1000),]
+```
+
+
+Attribute called "final weight" in the dataset description represents demographic weighting of these observations; this was disregarded for the purposes of this analysis.
+
+Additionally, several attributes in this dataset are categorical variables with more than two levels (e.g. native country, occupation, etc.).  
+
+Lastly, the size of this dataset can make some of the modeling techniques run slowly. Some models are run on a subset of data and will be noted. 
+
+# Part 1: univariate and unsupervised analysis 
+
+##Graphical and numerical summaries: e.g. histograms of continuous attributes, contingency tables of categorical variables, scatterplots of continuous attributes with some of the categorical variables indicated by color/symbol shape, etc.  
+
+```{r Prob1: Summarizing data, echo=TRUE, cache = TRUE, autodep = TRUE}
+library(GGally)
+library(ggplot2)
+#str(data$inclvl)#Factor w/ 2 levels " <=50K"," >50K": 1 1 1 1 1 1 1 2 2 2 
+#ggpairs(data.w, aes(colour = inclvl))
+
+summary(data)
+
+#histograms
+old.par <- par(mfrow=c(2,3))
+hist(data$age)
+hist(data$ed.num)
+hist(data$cgain)
+hist(data$closs)
+hist(data$hours)
+par(old.par)
+
+#scatterplots coloured by inclvl
+pairs(~age+ed.num+cgain+closs+hours, data = data.1000, col = data$inclvl)
+
+#scatterplots coloured by catgorical attributes
+old.par <- par(mfrow=c(2,2))
+plot(data.1000$age, data.1000$hours, col = data$inclvl, main = "age against hours grouped by inclvl")
+plot(data.1000$age, data.1000$hours, col = data$sex, main = "age against hours grouped by sex")
+plot(data.1000$age, data.1000$hours, col = data$race, main = "age against hours grouped by age")
+plot(data.1000$age, data.1000$hours, col = data$ncntry, main = "age against hours grouped by race")
+par(old.par)
+
+old.par <- par(mfrow=c(2,2))
+plot(data.1000$ed.num, data.1000$hours, col = data$inclvl, main = "ed.num against hours grouped by inclvl")
+plot(data.1000$ed.num, data.1000$hours, col = data$sex, main = "ed.num against hours grouped by sex")
+plot(data.1000$ed.num, data.1000$hours, col = data$race, main = "ed.num against hours grouped by race")
+plot(data.1000$ed.num, data.1000$hours, col = data$ncntry, main = "ed.num against hours grouped by nctry")
+par(old.par)
+
+old.par <- par(mfrow=c(2,2))
+plot(data.1000$ed.num, data.1000$age, col = data$inclvl, main = "ed.num against age grouped by inclvl")
+plot(data.1000$ed.num, data.1000$age, col = data$sex, main = "ed.num against age grouped by sex")
+plot(data.1000$ed.num, data.1000$age, col = data$race, main = "ed.num against age grouped by race")
+plot(data.1000$ed.num, data.1000$age, col = data$ncntry, main = "ed.num against age grouped by nctry")
+par(old.par)
+
+#boxplots of continuous variables by inclvl
+old.par <- par(mfrow=c(1,3))
+boxplot(ed.num~inclvl, data = data, main = "ed.num grouped by inclvl")
+boxplot(age~inclvl, data = data, main = "age grouped by inclvl")
+boxplot(hours~inclvl, data = data, main = "hours grouped by inclvl")
+par(old.par)
+
+#boxplots of continuous variables by sex
+old.par <- par(mfrow=c(1,3))
+boxplot(ed.num~sex, data = data, main = "ed.num grouped by sex")
+boxplot(age~sex, data = data, main = "age grouped by sex")
+boxplot(hours~sex, data = data, main = "hours grouped by sex")
+par(old.par)
+
+#boxplots of continuous variables by race
+old.par <- par(mfrow=c(1,3))
+boxplot(ed.num~race, data = data, main = "ed.num grouped by race",las=2)
+boxplot(age~race, data = data, main = "age grouped by race",las=2)
+boxplot(hours~race, data = data, main = "hours grouped by race",las=2)
+par(old.par)
+
+#probability tables of categorical variables
+sum(table(data$ed, data$inclvl)[1,])
+table(data$ed, data$inclvl)/sum(table(data$ed, data$inclvl))
+table(data$sex, data$inclvl)/sum(table(data$sex, data$inclvl))
+table(data$race, data$inclvl)/sum(table(data$race, data$inclvl))
+table(data$marital, data$inclvl)/sum(table(data$marital, data$inclvl))
+```
+
+> None of the scatterplots show clear correlation within the predictors. The boxplots show that there is possibly a difference in inclvl according to number of years of eduction, but not neccesarily by age (difference is less than variance, further t tests can be done) or hours worked. Between males and females there does not appear to be any difference in ed.num, age or hours. Between races, it appears that Asians and Pacific Islanders and Whites could have more ed.num than the other groups.
+
+> This suggests that if there is some kind of correlation between race and income, ed.num could be a confounding factor.
+
+
+##Principal components analysis of this data (scaled, and converted categorical data into binary data). Plot observations in the space of the first few principal components with subjects' gender and/or categorized income indicated by color/shape of the symbol. 
+
+```{r Prob1: PCA, echo=TRUE, cache = TRUE, autodep = TRUE}
+
+#make binary variables
+data.bin <- model.matrix(~.,data)
+
+#scale continuous variables
+data.bin[,c("age","hours","cgain","closs","ed.num")] <- scale(data.bin[,c("age","hours","cgain","closs","ed.num")]) 
+
+#PC model
+pr <- prcomp(data.bin[,c(-1,-51,-46)]) #col 1 is the y intercept. col 51 represents inclvl, 46 represents sex
+plot(pr)
+
+#top 5 contributors to PCs 1:4
+sort(abs(pr$rotation[,1]),decreasing = T)[1:5]
+sort(abs(pr$rotation[,2]),decreasing = T)[1:5]
+sort(abs(pr$rotation[,3]),decreasing = T)[1:5]
+sort(abs(pr$rotation[,4]),decreasing = T)[1:5]
+
+#plots of observations against top few PCs 
+old.par <- par(mfrow=c(3,3))
+plot(pr$x[,1:2],col=data$inclvl) #black = 1 = "<=50K", red = 2 = ">50K"
+plot(pr$x[,1:2],col=c(3,4)[data$sex]) #green = 1 = "Female", blue = 2 = "Male"
+plot(pr$x[,c(1,3)],col=data$inclvl) 
+plot(pr$x[,c(1,3)],col=c(3,4)[data$sex]) 
+plot(pr$x[,c(1,4)],col=data$inclvl) 
+plot(pr$x[,c(1,4)],col=c(3,4)[data$sex]) 
+plot(pr$x[,c(1,5)],col=data$inclvl) 
+plot(pr$x[,c(1,5)],col=c(3,4)[data$sex]) 
+par(old.par)
+```
+
+> Yes scaled the continuous variables before performing PCA, since PCA is reliant on the covariance matrix, which woud be very influenced by variables with extremely high variance or absolute values. 
+
+> I represented a multilevel categorical variable into a collection of (N-1) dummy binaries and then perform PCA on this data.
+
+> The scree plot shows that most of the variation in the data can be expained by PCs 1:5. Looking at the top contributing predictors to PCs1:5, the predictors that matter are the continuous variables, especially age, hours, ed.num. The binary variables do not feature much, except the marital status of never married.
+
+> Plotting the observations against the top PCs shows that Income level can be explained by PC1. <50K earners are positive scores on PC1, and >50K earners are negative scores on PC1. 
+
+> PC2, 3 and 5 do not manage to tease out any other clusters in the data, as we do not see the cloud of data points breaking in the direction of the y axis. They are not able to cluster well the data by sex, as can be seen by the overlap between blue and green points. 
+
+> PC 4 (and 1) might be the best at clustering the data by sex as can be seen by the green (female) points gathering towards the top right corner of the cloud. PC4 and 1 also seem to cluster the red points towards the top left corner. 
+
+##Univariate assessment of associations between outcome and each of the attributes (e.g. t-test or logistic regression for continuous attributes, contingency tables/Fisher exact test/$\chi^2$ test for categorical attributes).  
+
+```{r Prob1: Univariate Tests, echo=TRUE, cache = TRUE, autodep = TRUE}
+
+#t-tests for continuous predictors on full dataset
+t.test(data$age~data$inclvl)
+t.test(data$hours~data$inclvl)
+t.test(data$ed.num~data$inclvl)
+t.test(data$cgain~data$inclvl)
+t.test(data$closs~data$inclvl)
+
+#chisq-tests for categorical predictors on full dataset
+chisq.test(table(data$ed, data$inclvl))
+chisq.test(table(data$sex, data$inclvl))
+chisq.test(table(data$race, data$inclvl))
+chisq.test(table(data$marital, data$inclvl))
+chisq.test(table(data$occ, data$inclvl))
+chisq.test(table(data$workclass, data$inclvl))
+chisq.test(table(data$rs, data$inclvl))
+chisq.test(table(data$ncntry, data$inclvl))
+
+#t-tests for continuous predictors on 1000 obs dataset
+t.test(data.1000$age~data.1000$inclvl)
+t.test(data.1000$hours~data.1000$inclvl)
+t.test(data.1000$ed.num~data.1000$inclvl)
+t.test(data.1000$cgain~data.1000$inclvl)
+t.test(data.1000$closs~data.1000$inclvl)
+
+#chisq-tests for categorical predictors on 1000 obs dataset
+chisq.test(table(data.1000$ed, data.1000$inclvl))
+chisq.test(table(data.1000$sex, data.1000$inclvl))
+chisq.test(table(data.1000$race, data.1000$inclvl))
+chisq.test(table(data.1000$marital, data.1000$inclvl))
+chisq.test(table(data.1000$occ, data.1000$inclvl))
+chisq.test(table(data.1000$workclass, data.1000$inclvl))
+chisq.test(table(data.1000$rs, data.1000$inclvl))
+chisq.test(table(data.1000$ncntry, data.1000$inclvl))
+```
+
+> Running the tests on the full dataset, there is a difference in mean age,hours,education years,cgain and closs between income levels at the 0.05 sig level. For ALL the categorical variables, there is evidence that the categorical variable is not independent of income level, at the 0.05 significance level.All the predictors appear to be associated with the outcome variable, since all the p-values are close to zero. 
+
+> As the significance of the association between predictor and response might be exagerated due to the very large number observations, I ran the tests on 1000 obs sample set. Most of the predictors remained significant with very low p values, except for ncntry, which was insignificant with p = 0.3052(>0.05 p value) at 0.05 signifiance level. Some categorical predictors ended up with too few counts for the chi-sq test to be reliable.
+
+
+# Part 2: logistic regression 
+
+##logistic regression model of the outcome as a function of multiple predictors in the model.  Comparison with the performance of other methods reported in the dataset description.
+
+```{r Prob2: Logistic Regression, echo=TRUE, cache = TRUE, autodep = TRUE}
+library(caret)
+
+#All predictors
+log <- glm(inclvl~., data=data, family=binomial)
+summary(log)
+
+#Only siginificant predictors at 0.001 sig level
+log <- glm(inclvl~age+workclass+ed.num+marital+occ+sex+cgain+closs+hours+ncntry, data=data, family=binomial)
+summary(log)
+
+#resampling for test errors, specificity, sensitivity 
+thres = 0.5 #thres = 0.5 gives best error rate. Tried other values of thres but not shown.
+values.log = NULL
+for (sim in 1:30){
+train <- sample(c(T,F),nrow(data),replace = T)
+log <- glm(inclvl~age+workclass+ed.num+marital+occ+sex+cgain+closs+hours+ncntry, data=data[train,], family=binomial)
+log.pred <- predict(log, newdata=data[!train,], type="response")
+cm <- confusionMatrix(data=factor(ifelse(log.pred>thres," >50K"," <=50K")),ref=data$inclvl[!train], positive=" >50K")
+values.log <- rbind(values.log, data.frame(value=c(1-cm$overall["Accuracy"], cm$byClass["Sensitivity"], cm$byClass["Specificity"]), metric=c("Error","Sensitivity","Specificity")))
+rownames(values.log) <- NULL
+}
+
+
+#summary of test errors
+ggplot(values.log, aes(x=metric, y=value))+geom_boxplot()
+summary(subset(values.log,metric == "Error"))
+summary(subset(values.log,metric == "Sensitivity"))
+summary(subset(values.log,metric == "Specificity"))
+```
+
+> Running logistic regression on all predictors found that education level(ed), type of relationship(rs) and race(race) were not significant, in general. Some categories of the significant predictors might not have been, or some categories of the non-significant predictors might have been sigificant at higher significance levels. But in general, I concluded that ed, rs and race could be left out. It was not surprising that ed was not significant, since the information it provided would be captured by ed.num. And race too, which seem to be counfounded by ed.num in earlier analysis of the data. I'm not surprised that rs was non signficant too, since that seemed to be an overly granular piece of information, and I don't think it will make big difference in income level. Marital status is a similar measure which is already in the model.
+
+> Results using threshold of 0.5: After resampling, mean test error found is 16%, which is comparable to the author's results. The error results are also very stable, judging from the small IQR. Sensitivity is not very good at about 58%, compared to Specificity which is 92%. 
+
+> Adjusting Threshold: Using threshold of 0.5, the low sensitivity suggests that I was lenient in predicting positive values(>50K), so i lowered my threshold to 0.3 and found that I could improve sensitivity to 77%, but at the expense of specificity (18%) and error (18%). Raising my threshold to 0.6 gave better specificity but worse error and sensitivity. 
+
+> Given the purposes of this analysis, i don't think it is essential to have high sensitivity, so i would use the threshold of 0.5 to achieve a better error rate. For brevity, I only show the output for the optimal threshold of 0.5 based on best error rate.
+
+# Part 3: random forest (25 points)
+
+## random forest model of the categorized income, variable importance plots and comparison with logistic model and errors given in dataset description.
+
+```{r random forest, echo=TRUE, cache = TRUE, autodep = TRUE}
+library(randomForest)
+
+#Tune mtry
+old.par <- par(mfrow=c(2,5))
+for (sim in 1:10){
+tuneRF(y=data.1000$inclvl, x=data.1000[,-grep("inclvl",colnames(data))])
+#tuneRF(y=data.1000$inclvl, x=data.1000[,c("age","workclass","ed.num","marital","occ","sex","cgain","closs","hours","ncntry")])
+} 
+par <- old.par
+
+#RF Model, Lowest OOB error most frequently at mtry = 2:3
+
+#Variable Importance Plot (decrease in node impurity) on entire dataset
+rf <- randomForest(inclvl~., data=data)
+varImpPlot(rf, sort=TRUE, n.var=min(30, nrow(rf$importance)))
+
+#thres = 0.5 #thres = 0.5 gives best error rate. Tried other values of thres but not shown.
+values.rf = NULL
+oob = 0
+for (sim in 1:30){
+train <- sample(c(T,F),nrow(data),replace = T)
+rf <- randomForest(inclvl~., data=data[train,], mtry=2)
+#rf <- randomForest(inclvl~age+workclass+ed.num+marital+occ+sex+cgain+closs+hours+ncntry, data=data.w[train,], mtry=2)
+rf.pred <- predict(rf, newdata=data[!train,])
+cm <- confusionMatrix(data=rf.pred,ref=data$inclvl[!train], positive=" >50K")
+values.rf <- rbind(values.rf, data.frame(value=c(1-cm$overall["Accuracy"], cm$byClass["Sensitivity"], cm$byClass["Specificity"]), metric=c("Error","Sensitivity","Specificity")))
+rownames(values.rf) <- NULL
+oob <- c(oob, mean(rf$err.rate[,1])) #average of the mean oob rate for each sim 
+}
+#values
+#oob
+#summary of test errors
+ggplot(values.rf, aes(x=metric, y=value))+geom_boxplot()+geom_hline(yintercept=mean(oob))+geom_text(aes(3,mean(oob),label = paste("mean oob over 30 sims = ", round(mean(oob),3)), vjust = -1))
+summary(subset(values.rf,metric == "Error"))
+summary(subset(values.rf,metric == "Sensitivity"))
+summary(subset(values.rf,metric == "Specificity"))
+
+
+
+```
+
+> The results of the varImpPlot shows that the top predictors are age, cgain, occ. And the least important variables are sex, race and nctry. This is fairly in line with results of the logistic regression, except that ed.num and hours featured more prominently in logistic regression. 
+
+> First, I tuned the randomforest to find the optimal value of mtry, which was around mtry = 2 or 3. I will use mtry = 2 for convenience, and because it turns up a litte more often.
+
+> The sensitivity and specificity achieved was 65% and 93% respectively.
+
+> Mean Oob error (14.3%) was very comparable to mean test error (15%), which is to be expected. Oob was only calculated on the training set, and not the entire dataset. Randomforest performs better than logistic regression, suggesting that the randomforest's "step-like" decision boundary might suit the data better than logistic regression's linear decision boundary.
+
+> This test error of 14.3% is very comparable to the results the data authors have, in particular it is comparable with some of the better results (his error rates range from 14% to 21%), and almost on par with the NBTree error rate (14.1%). 
+
+
+# Part 4: Support Vector Machine
+
+## SVM model of this data choosing parameters (e.g. choice of kernel, cost, etc.) that appear to yield better performance.  Comparison of performance of other methods reported in the dataset description.
+
+```{r SVM}
+library(e1071)
+
+#for more efficient processing, i tuned the parameters beforehand and hard coded the most commonly found optimal set of parameters into the svm model. 
+
+run.svm <- function(data, kernel = "linear", cost=1, gamma=if (is.vector(data)) 1 else 1 / ncol(data), coef0=0, degree=3){
+values.svm = NULL
+for (sim in 1:30){
+train <- sample(c(T,F),nrow(data),replace = T)
+svm <- svm(inclvl~., data=data[train,],kernel=kernel, cost=cost,gamma=gamma, coef0=coef0, degree=degree ) #use range of params tuned from above
+pred <- predict(svm, newdata = data[!train,])
+cm <- confusionMatrix(data=pred,ref=data$inclvl[!train], positive=" >50K")
+values.svm <- rbind(values.svm, data.frame(value=c(1-cm$overall["Accuracy"], cm$byClass["Sensitivity"], cm$byClass["Specificity"]), metric=c("Error","Sensitivity","Specificity")))
+rownames(values.svm) <- NULL
+}
+return (values.svm)
+}
+
+#linear kernel
+#summary(tune(svm,inclvl~., data=data.1000,kernel="linear",ranges=list(cost=c(0.2, 0.3,0.4,0.5, 0.6, 0.7)))) #more granular search finds best C around 0.4. 
+values.svm.l <- run.svm(data=data.1000, kernel = "linear", cost = 0.4)
+ggplot(values.svm.l, aes(x=metric, y=value))+geom_boxplot()+ggtitle("Linear Kernel")
+summary(subset(values.svm.l,metric == "Error"))
+summary(subset(values.svm.l,metric == "Sensitivity"))
+summary(subset(values.svm.l,metric == "Specificity"))
+
+#radial kernel
+#summary(tune(svm,inclvl~., data=data.1000,kernel="radial",ranges=list(cost=c(1,1.6,2), gamma=c(0.005, 0.1, 0.5)))) #more granular search always finds best gam = 0.1, cost = 1.6
+values.svm.r <- run.svm(data=data.1000, kernel = "radial", cost = 1.6, gam = 0.1)
+ggplot(values.svm.r, aes(x=metric, y=value))+geom_boxplot()+ggtitle("Radial Kernel")
+summary(subset(values.svm.r,metric == "Error"))
+summary(subset(values.svm.r,metric == "Sensitivity"))
+summary(subset(values.svm.r,metric == "Specificity"))
+
+
+#polynomial kernel
+#for (i in 1:10){
+#summary(tune(svm, inclvl~. , data=data.1000, kernel="polynomial", ranges=list(cost=c(0.2, 0.4,0.6,1), gamma=c(0.1), coef0=c(0,1), degree=c(2,3)))) } #tune most often finds best cost = 0.4, gam = 0.1, coef0 = 1 and degree = 2. 
+values.svm.p <- run.svm(data=data.1000, kernel = "polynomial", cost = 0.4, gam = 0.1, degree=2, coef0=1)
+ggplot(values.svm.p, aes(x=metric, y=value))+geom_boxplot()+ggtitle("Polynomial Kernel")
+summary(subset(values.svm.p,metric == "Error"))
+summary(subset(values.svm.p,metric == "Sensitivity"))
+summary(subset(values.svm.p,metric == "Specificity"))
+
+```
+
+> Note: Before running the resampling, I tuned the parameters using the entire dataset to narrow down the range of cost, gamma, coef0 and degree to use. Otherwise running resampling on the large range of the parameters would take a long time.  I found that even after fixing the parameters, the SVM ran on the full data set took prohibitively long to run - I left it overnight and it could not finish, or got frozen midway. 
+
+> In addition, I ran all SVM models on the 1000 observation random subset, data.1000. This is to reduce run time on SVM. 1000 sample is still a fairly large dataset (larger than the rule of thumb for central limit theorem to apply), so i think it does represent the full data set well enough. Besides, the result i got had fairly small variance, which suggests that the 1000 sized sample is large enough to get stable results. 
+
+> Based on my run on 1000 observations sample, I noted that the best gamma was always the smallest gamma, which was 0.1 in my ranges, suggesting the data prefers a smoother decision boundary. Indeed the comparison of various kernels showed that Linear Kernel yielded the lowest error rate of the 3 kernels. Results, based on my run, are as follows: 
+
+> With Linear Kernel, the mean test error is 18.3%, sensitivity is 50.3% and specificity is 91.6%. With Radial Kernel, the mean test error is 20.3%, sensitivity is 34.4% and specificity is 94.6%. With Polynomial Kernel, the mean test error is 24.5%, sensitivity is 0% and specificity is 100%. This is basically classifying everyone as a <=50K earner, since the percentage of >50K earners in the entire dataset was 24.78%.
+
+
+# Part 5: compare logistic regression, random forest and SVM model performance 
+
+##Comparison of performance of the models developed above (logistic regression, random forest, SVM) in terms of their accuracy, error and sensitivity/specificity.  
+
+```{r comparison, echo=TRUE, cache = TRUE, autodep = TRUE}
+values.log <- cbind(values.log,method="log")
+values.rf <- cbind(values.rf,method="rf")
+values.svm.l <- cbind(values.svm.l,method="svml")
+values.svm.r <- cbind(values.svm.r,method="svmr")
+values.svm.p <- cbind(values.svm.p,method="svmp")
+
+compiled.values <- rbind(values.log,values.rf,values.svm.l,values.svm.r,values.svm.p)
+
+ggplot(compiled.values, aes(x=metric, y=value, col=factor(method)))+geom_boxplot()
+
+summary(data$inclvl)[2]/length(data$inclvl)
+```
+
+> Log, RF, SVM with linear and radial gave error rates in the range of 14% to 21% which is similar to the errors achieved by the author. Please note that SVM was run on the 1000 observations subset, data.1000, while Log and RF was run on the entire dataset.
+
+> Random forest performed the best overall. Logistic Regression performed 2nd best, followed by SVM with linear kernel. SVM radial Kernel did not perform as well.
+
+> That Random forest performed the best is actually quite consistent with the PC1 to PC4 PCA plot where the points look like they are in the "left top corner" of the points; basically it looks like it requires two lines at right angle to seperate out one group of points. Perhaps this is really the case in the data, which is why Random Forest does the best job. 
+
+> Bearing in mind that the percentage of >50K earners in the entire dataset was 24.78%, even if we just predicted that everyone would have income of <=50K, we would get an error rate of 24.78%. As such the SVM with Polynomial kernel with its error rate of 24.5% is not very useful.
+
+> Given also that we could get error rate of 24.78% by predicting in one direction, I also do not think an error rate of 20% (SVM radial kernel) is very impressive. In fact the best error rate, achieved by RF, of 14% basically provides a 10% improvement in error. Since the authors of the dataset are also acchieving similar error rates with a wider range (and possibly more sophisticated) models, this is probably a limitation of the dataset and type of data (socioeconomic).
+
+# KNN model
+
+## KNN model for this data, evaluate its performance for different values of $k$ on different splits of the data into training and test and compare it to the performance of other methods reported in the dataset description.  
+
+
+```{r KNN Model, echo=TRUE, cache = TRUE, autodep = TRUE}
+#Use 1000 observation subset for this. Full data set takes too long to run. 
+data.bin <- model.matrix(~.,data.1000)
+data.bin <- data.bin[,-1]
+
+#make equal ranges for all vars. use binary (0/1) vars for categorical vars, normalize continuous vars to between 0 and 1.
+maxmin <- function(x){(x-min(x))/(max(x)-min(x))}
+data.bin[,c("age","ed.num","cgain","closs","hours")]<-apply(data.bin[,c("age","ed.num","cgain","closs","hours")],2,maxmin)
+
+
+
+library(e1071)
+library(class)
+library(caret)
+
+train <- sample(c(T,F),nrow(data.bin),replace = T)
+tune <- tune.knn(x=data.bin[train,-ncol(data.bin)], y=factor(data.bin[train,c(ncol(data.bin))]), k=c(5,20,40,60,80))
+plot(tune)
+
+values.knn = NULL
+for (sim in 1:30){
+train <- sample(c(T,F),nrow(data.bin),replace = T)
+#tune <- tune.knn(x=data.bin[train,-ncol(data.bin)], y=factor(data.bin[train,c(ncol(data.bin))]), k = k)
+pred <- knn(train=data.bin[train,-ncol(data.bin)], test=data.bin[!train,-ncol(data.bin)], cl=data.bin[train,ncol(data.bin)], k = tune$best.parameters$k) #classification in last col.
+cm <- confusionMatrix(data=pred,ref=data.bin[!train,ncol(data.bin)])#, positive=" >50K")
+values.knn <- rbind(values.knn, data.frame(value=c(1-cm$overall["Accuracy"], cm$byClass["Sensitivity"], cm$byClass["Specificity"]), metric=c("Error","Sensitivity","Specificity")))
+rownames(values.knn) <- NULL
+}
+
+values.knn <- cbind(values.knn,method=paste("knn",tune$best.parameters$k))
+compiled.values <- rbind(values.log,values.rf,values.svm.l,values.svm.r,values.svm.p,values.knn)
+ggplot(compiled.values, aes(x=metric, y=value, col=factor(method)))+geom_boxplot()
+summary(subset(values.knn,metric == "Error"))
+summary(subset(values.knn,metric == "Sensitivity"))
+summary(subset(values.knn,metric == "Specificity"))
+
+```
+
+
+> I rescaled the continuous data to between 0 and 1, and converted categorical variables to binary. This way all variables have the same range and will not unduely influence KNN. 
+
+> Please note that KNN, like SVM, was run on the 1000 observations subset, data.1000, as KNN took prohibitively long processing times to run on the full data set. Logistic regression and Random Forest was run on the full dataset.
+
+> The lowest error rates are obtained from k = 5 to 60, a fairly wide range of k. This instability is probably due to tuning only on a single data.1000 sample. If i could run the model on the entire data set, i think i would be able to find a smaller range of k, and get more stable results. 
+
+> The error rates in this run from knn model with k = 40 are: test error = 17.8%, sensitivity = 93.8%, specificity = 49%. The test error is slightly better than SVM with linear kernel but not as well as logistic or random forest. In general, this dataset does well with a fairly inflexible decision boundary.
+
+> It is interesting to note that while the other models gave very high (over 90%) specificity and lower sensitivity (50-60%), KNN gives us the opposite - high sensitivity but specificity not much better than chance. KNN would be good if there was a requirement for being accurate with  positive results, although it is probably not the case here. 
+
+
+
+
+# Variable importance in SVM
+
+## Develop a variable importance method for SVM; SVM does not appear to provide readily available tools for judging relative importance of different attributes in the model.  This approach is similar to that employed by random forest where importance of any given attribute is measured by the decrease in model performance upon randomization of the values for this attribute.
+
+```{r Variable Importance in SVM, echo=TRUE, cache = TRUE, autodep = TRUE}
+
+run.svm.rp <- function(data, kernel = "linear"){
+errors = NULL
+for (sim in 1:30){
+train <- sample(c(T,F),nrow(data),replace = T)
+svm <- svm(inclvl~., data=data[train,],kernel=kernel)
+pred <- predict(svm, newdata = data[!train,])
+table <- table(pred = pred, truth = data$inclvl[!train])
+errors <- c(errors, 1-sum(diag(table))/sum(table))
+}
+return (mean(errors))
+}
+
+#randomly permutate each column one by one to find differene in error over original variables
+run.rdmperm <- function(data){
+  mean.err <- run.svm.rp(data) #save error of full model with all original variables
+  for (col in 1:(ncol(data)-1)){
+  data.rp <- data
+  data.rp[,col] <- sample(data[,col])
+  mean.err <- c(mean.err, run.svm.rp(data.rp))
+  }
+  return (mean.err)
+}
+
+#run var importance on 1000 observations for more efficient processing
+mean.err <- run.rdmperm(data.1000)
+
+#increase in error compared to original variables model
+mean.err.inc <- mean.err[2:length(mean.err)] - mean.err[1]
+mean.err.inc <- data.frame(err.inc = mean.err.inc, var = names(data.1000)[1:(length(mean.err)-1)])
+
+mean.err.inc <- mean.err.inc[order(mean.err.inc$err.inc,decreasing=T),]
+
+library(ggplot2)
+ggplot(mean.err.inc, aes(x = reorder(var, -err.inc), y = err.inc)) +
+         geom_bar(stat = "identity")
+
+#plot(x = mean.err.inc$var, y = mean.err.inc$err.inc, xlab = "Increase in error after randomizing specified var", las = 2)
+#mean.err.inc
+
+```
+
+> The logic behind the variable importance method I devised is: if a single variable is jumbled up by random permutation by how much will the error increase over the model with all original variables.  
+
+> I took variables in turn and randomly permutated the rows of that observation, and then ran svm on it. I compared its test error to the test error of the model that had ALL variables in original form. Each value of error on the chart is the increase over the original unpermutated model. 
+
+> I note that the variable importance result are not very stable, despite running 30 simulations on each round of variable permutation. In the run that i am looking at, the top five variables are occ, age, marital, sex and hours.  There are some negative values, and those are represent variables that after random permutation actually improved the model, which means their inclusion actually make the model worse, so they are least important variables.
+
+> Please note that the variable importance method is run on the 1000 observation dataset for better runtimes. I do think that if we ran it on a larger set, the variable importance result might be more stable, but the processing time needed is too prohibitive for this assignment. 
